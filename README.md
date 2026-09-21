@@ -16,8 +16,8 @@ A small, complete online shop, designed natively in [Webstudio](https://webstudi
 
 ### 1. Copy the Webstudio project
 
-Open the template in Webstudio and clone it into your workspace: **[Webstudio template](https://p-203cb399-37cc-4cff-9d7f-7bd9b24f1c95.apps.webstudio.is/?authToken=8988cf57-da2e-4cec-9320-bc184049b0d4&mode=preview)**.
-It starts unconnected: pages render, the catalog stays empty until step 4.
+Open the **[Webstudio template](https://p-203cb399-37cc-4cff-9d7f-7bd9b24f1c95.apps.webstudio.is/?authToken=8988cf57-da2e-4cec-9320-bc184049b0d4&mode=preview)** and select Clone to copy it into your workspace.
+It starts unconnected: pages render, the catalog stays empty and checkout says the shop isn't connected yet, until step 4.
 
 ### 2. Deploy Merchant
 
@@ -34,7 +34,7 @@ curl -fsSL https://raw.githubusercontent.com/zehjotkah/webstudio-merchant-templa
 ```
 
 It creates Merchant's API keys, creates the Stripe webhook, connects your Stripe account (use a `sk_test_…` key
-to start) and can add demo products. It prints your keys once; save them in your password manager.
+to start) and can add demo products. It prints your keys once; save them in your password manager. The admin key (`sk_…`) is for steps 6 and 7 only; never paste it into Webstudio.
 
 ### 4. Connect Webstudio
 
@@ -45,20 +45,27 @@ In your Webstudio copy, open the Global Root variable **`shop`** and fill in:
 | `apiUrl` | Your Merchant URL |
 | `publicKey` | `pk_…` from the setup script (safe in the browser: it can only read products and create carts) |
 | `stripePublishableKey` | `pk_test_…` from Stripe → Developers → API keys (empty = Stripe's hosted checkout page) |
-| `accountUrl` | Your account Worker URL from step 5, or empty |
+| `accountUrl` | Your account Worker URL from step 6, or empty |
 
-Publish. Test with card `4242 4242 4242 4242`, any future date, any CVC.
+Publish.
 
-### 5. Optional: customer accounts and order emails
+### 5. Test a purchase
+
+With Stripe test keys no real money moves. Add something to the cart, fill in the checkout form and pay with card
+`4242 4242 4242 4242`, any future expiry date and any three-digit CVC. The order appears in Merchant.
+Before going live, run the setup script again with your `sk_live_…` key, put your `pk_live_…` key into `shop`,
+and delete the demo notice on the cart page.
+
+### 6. Optional: customer accounts and order emails
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/zehjotkah/webstudio-merchant-template/tree/main/account)
 
 Paste your Merchant admin key (`sk_…`) when asked. Then, in the new repository Cloudflare created for you,
 edit `wrangler.jsonc`: set `SITE_ORIGIN`, onboard a sender domain in Cloudflare Email Sending, set `MAIL_FROM`
 and `SHOP_INBOX`, and uncomment `send_email`. Open the Worker's URL once: it registers itself for Merchant's
-order webhook. Put the URL into `shop.accountUrl`.
+order webhook. Put the URL into `shop.accountUrl` and publish.
 
-### 6. Optional: admin dashboard
+### 7. Optional: admin dashboard
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/zehjotkah/webstudio-merchant-template/tree/main/admin)
 
