@@ -1,0 +1,36 @@
+{
+  "name": "webstudio-merchant-account",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+
+  // Created automatically on first deploy; the Worker creates its tables itself.
+  "d1_databases": [
+    { "binding": "DB", "database_name": "webstudio-merchant-account" }
+  ],
+
+  // Talks to your Merchant Worker directly. Change "service" if you renamed Merchant.
+  "services": [
+    { "binding": "MERCHANT", "service": "webstudio-merchant" }
+  ],
+
+  // Sign-in links and order emails. Onboard your sending domain first
+  // (Cloudflare dashboard → Compute → Email Service → Email Sending), set MAIL_FROM, then uncomment:
+  // "send_email": [{ "name": "EMAIL" }],
+
+  "vars": {
+    "SHOP_NAME": "My Shop",
+    // Your published Webstudio site
+    "SITE_ORIGIN": "https://your-shop.example.com",
+    // More origins allowed to call this Worker, comma separated (e.g. your *.wstd.io staging domain)
+    "ALLOWED_ORIGINS": "",
+    // Sender address on your Email Sending domain, e.g. shop@mail.example.com
+    "MAIL_FROM": "",
+    // Your inbox for "new order" emails (empty = none) and your Merchant admin URL for them
+    "SHOP_INBOX": "",
+    "ADMIN_URL": ""
+  },
+
+  // Secret: MERCHANT_ADMIN_KEY (Merchant's sk_ key). The deploy button asks for it.
+
+  "triggers": { "crons": ["17 3 * * *"] }
+}

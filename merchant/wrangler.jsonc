@@ -1,0 +1,25 @@
+{
+  // Merchant from github.com/ygwyg/merchant, fetched and patched by fetch-merchant.mjs on install.
+  "name": "webstudio-merchant",
+  "main": "upstream/src/index.ts",
+  "compatibility_date": "2025-12-01",
+  // Lets Merchant's outbound webhooks (order emails) reach other Workers on the same account.
+  "compatibility_flags": ["global_fetch_strictly_public"],
+
+  "durable_objects": {
+    "bindings": [{ "name": "MERCHANT", "class_name": "MerchantDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MerchantDO"] }],
+
+  // Product images
+  "r2_buckets": [{ "binding": "IMAGES", "bucket_name": "webstudio-merchant-images" }],
+
+  "vars": {
+    "IMAGES_URL": "",
+    // Set to "true" once Stripe Tax is active on your Stripe account.
+    "STRIPE_AUTOMATIC_TAX": "false"
+  },
+
+  // Releases carts and repairs stock counts every 15 minutes.
+  "triggers": { "crons": ["*/15 * * * *"] }
+}

@@ -1,0 +1,13 @@
+.secrets/
+.temp/
+node_modules/
+.wrangler/
+.webstudio/
+.dev.vars
+webstudio-project-link.txt
+template-project/
+.dev/
+merchant/upstream/
+.DS_Store
+.claude/
+.mcp.json

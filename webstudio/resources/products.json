@@ -1,0 +1,4 @@
+{ "dataSourceName": "products",
+  "resource": { "name": "Products", "method": "get", "url": "shop.apiUrl + \"/v1/products\"",
+    "searchParams": [{ "name": "status", "value": { "type": "literal", "value": "active" } }, { "name": "limit", "value": { "type": "literal", "value": "100" } }],
+    "headers": [{ "name": "Authorization", "value": "\"Bearer \" + shop.publicKey" }, { "name": "Accept", "value": { "type": "literal", "value": "application/json" } }] } }

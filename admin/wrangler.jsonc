@@ -1,0 +1,6 @@
+{
+  // Static dashboard; sign in with your Merchant URL and admin key (kept in your browser only).
+  "name": "webstudio-merchant-admin",
+  "compatibility_date": "2025-12-01",
+  "assets": { "directory": "./dist", "not_found_handling": "single-page-application" }
+}

@@ -1,0 +1,280 @@
+diff --git a/src/do.ts b/src/do.ts
+index 9a5240b..8d4c5c5 100644
+--- a/src/do.ts
++++ b/src/do.ts
+@@ -447,20 +447,16 @@ export class MerchantDO extends DurableObject<MerchantEnv> {
+       [now]
+     );
+ 
++    // Open carts never reserved stock (that happens at checkout), so there is nothing to release.
++    // Subtracting it drove `reserved` negative and inflated available stock. Checked-out carts are
++    // released by the checkout.session.expired webhook instead. Repair any earlier damage:
++    this.run(`UPDATE inventory SET reserved = 0 WHERE reserved < 0`);
++
+     if (expiredCarts.length === 0) return 0;
+ 
+     const cartIds = expiredCarts.map((c) => c.id);
+     const placeholders = cartIds.map(() => '?').join(',');
+ 
+-    const reservedItems = this.query<{ sku: string; qty: number }>(
+-      `SELECT sku, SUM(qty) as qty FROM cart_items WHERE cart_id IN (${placeholders}) GROUP BY sku`,
+-      cartIds
+-    );
+-
+-    for (const item of reservedItems) {
+-      this.run(`UPDATE inventory SET reserved = reserved - ? WHERE sku = ?`, [item.qty, item.sku]);
+-    }
+-
+     this.run(`UPDATE carts SET status = 'expired' WHERE id IN (${placeholders})`, cartIds);
+     this.run(`DELETE FROM cart_items WHERE cart_id IN (${placeholders})`, cartIds);
+ 
+diff --git a/src/middleware/auth.ts b/src/middleware/auth.ts
+index efc2bc5..a43ad14 100644
+--- a/src/middleware/auth.ts
++++ b/src/middleware/auth.ts
+@@ -15,8 +15,19 @@ export const authMiddleware = createMiddleware<HonoEnv>(async (c, next) => {
+ 
+   const token = authHeader.slice(7);
+   const db = getDb(c.var.db);
+-  const stripeSecretKey = c.env.STRIPE_SECRET_KEY || null;
+-  const stripeWebhookSecret = c.env.STRIPE_WEBHOOK_SECRET || null;
++  let stripeSecretKey = c.env.STRIPE_SECRET_KEY || null;
++  let stripeWebhookSecret = c.env.STRIPE_WEBHOOK_SECRET || null;
++  // Fall back to the keys saved with POST /v1/setup/stripe, so connecting Stripe once is enough.
++  if (!stripeSecretKey || !stripeWebhookSecret) {
++    const [config] = await db.query<{ value: string }>(`SELECT value FROM config WHERE key = 'stripe'`);
++    if (config?.value) {
++      try {
++        const stored = JSON.parse(config.value);
++        stripeSecretKey ??= stored.secret_key || null;
++        stripeWebhookSecret ??= stored.webhook_secret || null;
++      } catch {}
++    }
++  }
+ 
+   const isOAuthToken = token.length === 64 && /^[a-f0-9]+$/.test(token);
+   if (isOAuthToken) {
+diff --git a/src/routes/checkout.ts b/src/routes/checkout.ts
+index ebb7cea..1e89842 100644
+--- a/src/routes/checkout.ts
++++ b/src/routes/checkout.ts
+@@ -140,7 +140,10 @@ app.openapi(addCartItems, async (c) => {
+ 
+   const validatedItems = [];
+   for (const { sku, qty } of items) {
+-    const [variant] = await db.query<any>(`SELECT * FROM variants WHERE sku = ?`, [sku]);
++    const [variant] = await db.query<any>(
++      `SELECT v.*, p.title AS product_title FROM variants v JOIN products p ON p.id = v.product_id WHERE v.sku = ?`,
++      [sku]
++    );
+     if (!variant) throw ApiError.notFound(`SKU not found: ${sku}`);
+     if (variant.status !== 'active') throw ApiError.invalidRequest(`SKU not active: ${sku}`);
+ 
+@@ -150,7 +153,8 @@ app.openapi(addCartItems, async (c) => {
+ 
+     validatedItems.push({
+       sku,
+-      title: variant.title,
++      // "Beeswax Candle – Large" reads better on Stripe, receipts and orders than "Large" alone.
++      title: variant.title === variant.product_title ? variant.title : `${variant.product_title} – ${variant.title}`,
+       qty,
+       unit_price_cents: variant.price_cents,
+     });
+@@ -232,7 +236,7 @@ const checkoutCart = createRoute({
+   path: '/{cartId}/checkout',
+   tags: ['Checkout'],
+   summary: 'Initiate Stripe checkout',
+-  description: 'Creates a Stripe checkout session and returns the URL',
++  description: 'Creates a Stripe checkout session. Hosted mode returns checkout_url; embedded mode returns client_secret.',
+   request: {
+     params: CartIdParam,
+     body: { content: { 'application/json': { schema: CheckoutBody } } },
+@@ -247,7 +251,10 @@ const checkoutCart = createRoute({
+ 
+ app.openapi(checkoutCart, async (c) => {
+   const { cartId } = c.req.valid('param');
+-  const { success_url, cancel_url, collect_shipping, shipping_countries, shipping_options } = c.req.valid('json');
++  const { ui_mode, success_url, cancel_url, return_url, collect_shipping, shipping_countries, shipping_options, shipping_address } = c.req.valid('json');
++  if (ui_mode === 'embedded' ? !return_url : !success_url || !cancel_url) {
++    throw ApiError.invalidRequest(ui_mode === 'embedded' ? 'return_url is required for embedded checkout' : 'success_url and cancel_url are required');
++  }
+ 
+   const stripeSecretKey = c.get('auth').stripeSecretKey;
+   if (!stripeSecretKey) {
+@@ -484,8 +491,28 @@ app.openapi(checkoutCart, async (c) => {
+     session = await stripe.checkout.sessions.create({
+       mode: 'payment',
+       customer_email: cart.customer_email,
+-      automatic_tax: { enabled: true },
+-      ...(collect_shipping && {
++      // Reserved stock is held until the session completes or expires; Stripe's minimum is 30 minutes.
++      expires_at: Math.floor(Date.now() / 1000) + 31 * 60,
++      automatic_tax: { enabled: c.env.STRIPE_AUTOMATIC_TAX !== 'false' },
++      // Address from the shop's own form: attach it to the payment and keep a copy for the webhook.
++      ...(shipping_address && {
++        payment_intent_data: {
++          shipping: {
++            name: shipping_address.name,
++            ...(shipping_address.phone && { phone: shipping_address.phone }),
++            address: {
++              line1: shipping_address.line1,
++              line2: shipping_address.line2,
++              city: shipping_address.city,
++              state: shipping_address.state,
++              postal_code: shipping_address.postal_code,
++              country: shipping_address.country,
++            },
++          },
++        },
++        shipping_options: shipping_options ?? defaultShippingOptions,
++      }),
++      ...(collect_shipping && !shipping_address && {
+         shipping_address_collection: {
+           allowed_countries:
+             shipping_countries as Stripe.Checkout.SessionCreateParams.ShippingAddressCollection.AllowedCountry[],
+@@ -494,10 +521,10 @@ app.openapi(checkoutCart, async (c) => {
+       }),
+       line_items: lineItems,
+       ...(stripeCouponId && { discounts: [{ coupon: stripeCouponId }] }),
+-      success_url,
+-      cancel_url,
++      ...(ui_mode === 'embedded' ? { ui_mode: 'embedded' as const, return_url } : { success_url, cancel_url }),
+       metadata: {
+         cart_id: cartId,
++        ...(shipping_address && { shipping_address: JSON.stringify(shipping_address) }),
+         ...(discount && {
+           discount_id: discount.id,
+           discount_code: discount.code || '',
+@@ -518,7 +545,8 @@ app.openapi(checkoutCart, async (c) => {
+   );
+ 
+   return c.json({
+-    checkout_url: session.url!,
++    checkout_url: session.url ?? null,
++    client_secret: session.client_secret ?? null,
+     stripe_checkout_session_id: session.id,
+   }, 200);
+ });
+diff --git a/src/routes/webhooks.ts b/src/routes/webhooks.ts
+index 0f003f8..1c8ff3f 100644
+--- a/src/routes/webhooks.ts
++++ b/src/routes/webhooks.ts
+@@ -99,11 +99,27 @@ webhooks.post('/stripe', async (c) => {
+ 
+         // Extract customer details from full Stripe session
+         const customerEmail = cart.customer_email;
++        // Address collected by Stripe, or by the shop's own form (passed through checkout metadata).
++        let formAddress: any = null;
++        try {
++          formAddress = session.metadata?.shipping_address ? JSON.parse(session.metadata.shipping_address) : null;
++        } catch {}
+         const shippingName =
+-          session.shipping_details?.name || session.customer_details?.name || null;
++          session.shipping_details?.name || formAddress?.name || session.customer_details?.name || null;
+         const shippingPhone =
+-          session.shipping_details?.phone || session.customer_details?.phone || null;
+-        const shippingAddress = session.shipping_details?.address || null;
++          session.shipping_details?.phone || formAddress?.phone || session.customer_details?.phone || null;
++        const shippingAddress =
++          session.shipping_details?.address ||
++          (formAddress
++            ? {
++                line1: formAddress.line1,
++                line2: formAddress.line2 ?? null,
++                city: formAddress.city,
++                state: formAddress.state ?? null,
++                postal_code: formAddress.postal_code,
++                country: formAddress.country,
++              }
++            : null);
+ 
+         // Upsert customer (create or update on email match)
+         let customerId: string | null = null;
+@@ -341,6 +357,32 @@ webhooks.post('/stripe', async (c) => {
+     }
+   }
+ 
++  // Abandoned checkout: Stripe expired the session, so give back the stock (and discount use)
++  // that was reserved when the checkout started.
++  if (event.type === 'checkout.session.expired') {
++    const expiredSession = event.data.object as Stripe.Checkout.Session;
++    const cartId = expiredSession.metadata?.cart_id;
++    if (cartId) {
++      const [cart] = await db.query<any>(`SELECT id FROM carts WHERE id = ? AND status = 'checked_out'`, [cartId]);
++      if (cart) {
++        const items = await db.query<any>(`SELECT sku, qty FROM cart_items WHERE cart_id = ?`, [cartId]);
++        for (const item of items) {
++          await db.run(
++            `UPDATE inventory SET reserved = MAX(reserved - ?, 0), updated_at = ? WHERE sku = ?`,
++            [item.qty, now(), item.sku]
++          );
++        }
++        if (expiredSession.metadata?.discount_id) {
++          await db.run(
++            `UPDATE discounts SET usage_count = MAX(usage_count - 1, 0), updated_at = ? WHERE id = ?`,
++            [now(), expiredSession.metadata.discount_id]
++          );
++        }
++        await db.run(`UPDATE carts SET status = 'expired', updated_at = ? WHERE id = ?`, [now(), cartId]);
++      }
++    }
++  }
++
+   // Log event
+   await db.run(
+     `INSERT INTO events (id, stripe_event_id, type, payload) VALUES (?, ?, ?, ?)`,
+diff --git a/src/schemas.ts b/src/schemas.ts
+index 3f982c7..a8c42ca 100644
+--- a/src/schemas.ts
++++ b/src/schemas.ts
+@@ -174,16 +174,34 @@ export const AddCartItemsBody = z.object({
+   })).min(1),
+ }).openapi('AddCartItems');
+ 
++// An address your own checkout form collected. Stripe then only takes the payment.
++export const CheckoutShippingAddress = z.object({
++  // Lengths keep the JSON copy in Stripe metadata under its 500-character limit.
++  name: z.string().min(1).max(80),
++  phone: z.string().max(25).optional(),
++  line1: z.string().min(1).max(80),
++  line2: z.string().max(80).optional(),
++  city: z.string().min(1).max(50),
++  state: z.string().max(40).optional(),
++  postal_code: z.string().min(1).max(16),
++  country: z.string().length(2).openapi({ example: 'US' }),
++}).openapi('CheckoutShippingAddress');
++
+ export const CheckoutBody = z.object({
+-  success_url: z.string().url().openapi({ example: 'https://example.com/success' }),
+-  cancel_url: z.string().url().openapi({ example: 'https://example.com/cancel' }),
++  // "embedded" renders Stripe Checkout inside your own page and returns a client_secret.
++  ui_mode: z.enum(['hosted', 'embedded']).optional().default('hosted'),
++  shipping_address: CheckoutShippingAddress.optional().openapi({ description: 'Collected by your own form; Stripe will not ask for an address' }),
++  success_url: z.string().url().optional().openapi({ example: 'https://example.com/success', description: 'Required for hosted checkout' }),
++  cancel_url: z.string().url().optional().openapi({ example: 'https://example.com/cancel', description: 'Required for hosted checkout' }),
++  return_url: z.string().url().optional().openapi({ example: 'https://example.com/success?session_id={CHECKOUT_SESSION_ID}', description: 'Required for embedded checkout' }),
+   collect_shipping: z.boolean().optional().default(false),
+   shipping_countries: z.array(z.string()).optional().default(['US']),
+   shipping_options: z.array(z.any()).optional(),
+ }).openapi('Checkout');
+ 
+ export const CheckoutResponse = z.object({
+-  checkout_url: z.string().url(),
++  checkout_url: z.string().url().nullable().openapi({ description: 'Hosted checkout only' }),
++  client_secret: z.string().nullable().openapi({ description: 'Embedded checkout only; pass to stripe.initEmbeddedCheckout' }),
+   stripe_checkout_session_id: z.string(),
+ }).openapi('CheckoutResult');
+ 
+diff --git a/src/types.ts b/src/types.ts
+index 9b57c56..fd7a8d6 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -6,6 +6,8 @@ export type Env = {
+   IMAGES_URL?: string;
+   STORE_NAME?: string;
+   STRIPE_SECRET_KEY?: string;
++  /** "false" disables Stripe Tax on checkout sessions (it must be activated in Stripe first). */
++  STRIPE_AUTOMATIC_TAX?: string;
+   STRIPE_WEBHOOK_SECRET?: string;
+ };
+ 

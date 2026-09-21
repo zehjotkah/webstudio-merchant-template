@@ -1,0 +1,1 @@
+<div ws:label="Gallery Thumbs" role="group" aria-label="Product images" ws:show={expression`product.data.variants.length > 1`} ws:style={css`display: grid; grid-template-columns: repeat(auto-fill, minmax(4.5rem, 1fr)); gap: var(--gap-xs);`} />

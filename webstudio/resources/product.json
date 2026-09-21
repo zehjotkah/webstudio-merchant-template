@@ -1,0 +1,3 @@
+{ "dataSourceName": "product",
+  "resource": { "name": "Product", "method": "get", "url": "shop.apiUrl + \"/v1/products/\" + system.params.id",
+    "headers": [{ "name": "Authorization", "value": "\"Bearer \" + shop.publicKey" }, { "name": "Accept", "value": { "type": "literal", "value": "application/json" } }] } }

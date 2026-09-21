@@ -1,0 +1,20 @@
+{
+  "name": "webstudio-merchant",
+  "private": true,
+  "type": "module",
+  "description": "Merchant (github.com/ygwyg/merchant) with the Webstudio template patch, fetched at install time.",
+  "scripts": {
+    "postinstall": "node fetch-merchant.mjs",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "dependencies": {
+    "@hono/swagger-ui": "^0.5.3",
+    "@hono/zod-openapi": "^0.18.3",
+    "hono": "^4.6.0",
+    "stripe": "^17.0.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.45.0"
+  }
+}

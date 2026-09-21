@@ -1,0 +1,32 @@
+{
+  "name": "webstudio-merchant-account",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:demo": "wrangler deploy -c wrangler.demo.jsonc"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "typescript": "^5.6.0",
+    "wrangler": "^4.45.0"
+  },
+  "description": "Customer accounts and order emails for the Webstudio \u00d7 Merchant shop template.",
+  "cloudflare": {
+    "bindings": {
+      "MERCHANT_ADMIN_KEY": {
+        "description": "Your Merchant admin key (starts with `sk_`). The setup script prints it after deploying Merchant."
+      },
+      "SITE_ORIGIN": {
+        "description": "Your published Webstudio site, for example `https://shop.example.com`. Only this origin may call the Worker."
+      },
+      "MAIL_FROM": {
+        "description": "Sender address on a domain onboarded to Cloudflare Email Sending. Needed for sign-in links and order emails."
+      },
+      "SHOP_INBOX": {
+        "description": "Where \"new order\" emails go. Leave empty to skip them."
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "webstudio-merchant-admin",
+  "private": true,
+  "type": "module",
+  "description": "Merchant's admin dashboard (github.com/ygwyg/merchant/tree/main/admin), fetched and built at install time.",
+  "scripts": {
+    "postinstall": "node fetch-admin.mjs",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.45.0"
+  }
+}
