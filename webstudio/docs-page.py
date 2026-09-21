@@ -6,7 +6,8 @@ Everything is escaped for Webstudio JSX (braces and angle brackets become entiti
 import html
 import re
 
-REPO = "#repository"  # replaced with the template's GitHub URL once it is public
+REPO = "https://github.com/zehjotkah/webstudio-merchant-template"
+DEPLOY = "https://deploy.workers.cloudflare.com/?url=" + REPO + "/tree/main/"
 
 
 def esc(text):
@@ -56,6 +57,10 @@ def table(head, *rows):
             f'<thead><tr>{th}</tr></thead><tbody>{trs}</tbody></table></div>')
 
 
+def deploy(folder, label):
+    return f'<p><a href="{DEPLOY}{folder}" target="_blank" rel="noopener" craft="button">{esc(label)}</a></p>'
+
+
 def h3(text):
     return f'<h3 craft="heading, heading-s" ws:style={{css`margin-top: var(--gap-s);`}}>{esc(text)}</h3>'
 
@@ -95,11 +100,11 @@ SECTIONS = [
     ]),
     ("requirements", "What you need", [
         bullets("A Webstudio plan with dynamic data (Resources).",
-                "A Cloudflare account. The Workers free plan is enough to start; Merchant uses Durable Objects and R2, the account Worker uses D1.",
-                "A domain on Cloudflare DNS if you want sign-in emails (Cloudflare Email Sending).",
+                "A Cloudflare account. The Workers free plan is enough to start.",
                 "A Stripe account. Test mode works for everything below.",
-                "Node.js 20+ on your computer for the one-time setup commands."),
-        p(f"Get the code from the [template repository]({REPO}). It contains `account/` (the account Worker), `merchant.patch` (additions and fixes for Merchant, see [Changes to Merchant](#merchant-changes)) and `webstudio/bridge.js` (the readable source of the Shop Bridge). Merchant itself always comes from its own repository; the template does not ship a fork."),
+                "Node.js 20+ on your computer, once, for the setup script.",
+                "Optional: a domain on Cloudflare DNS for sign-in and order emails (Cloudflare Email Sending)."),
+        p(f"Everything outside Webstudio lives in the [template repository]({REPO}): deploy wrappers for Merchant and its admin dashboard, the optional account Worker, the setup script and the Shop Bridge source. Merchant itself is fetched from its own repository during the build; the template ships only a patch, never a fork."),
     ]),
     ("checkout-modes", "Choose your checkout", [
         p("The template supports two checkouts. You pick one by filling in, or leaving empty, `stripePublishableKey` in the `shop` variable."),
@@ -112,66 +117,50 @@ SECTIONS = [
         p("Countries offered for shipping come from the options of the Country select on `/cart`, in both modes. Edit them in Webstudio."),
     ]),
     ("merchant", "1. Deploy Merchant", [
-        code("git clone https://github.com/ygwyg/merchant.git",
-             "cd merchant",
-             "git apply ../webstudio-merchant-template/merchant.patch   # skip for hosted checkout",
-             "npm install",
-             "npx wrangler login",
-             "npx wrangler deploy"),
-        p("Optionally rename the Worker in `wrangler.jsonc` (`\"name\"`); the account Worker refers to Merchant by this name. If you want order emails, also add `\"compatibility_flags\": [\"global_fetch_strictly_public\"]` there: it lets Merchant's webhooks reach the account Worker on the same Cloudflare account."),
-        p("Wrangler prints your Merchant URL, for example `https://webstudio-merchant.your-subdomain.workers.dev`. Now create the API keys. This works exactly once per store:"),
-        code("MERCHANT_URL=https://webstudio-merchant.your-subdomain.workers.dev npx tsx scripts/init.ts --remote"),
+        deploy("merchant", "Deploy Merchant to Cloudflare"),
+        p("Cloudflare copies the deploy wrapper into your GitHub account, creates the Worker with its database and image bucket, and deploys it. During the build it fetches Merchant at a pinned version and applies `merchant.patch`. Note the URL it shows, for example `https://webstudio-merchant.your-subdomain.workers.dev`."),
+        p("Prefer the terminal? Clone the repository and run `npm install && npx wrangler deploy` inside `merchant/`."),
+    ]),
+    ("stripe", "2. Run the setup script", [
+        code("curl -fsSL https://raw.githubusercontent.com/zehjotkah/webstudio-merchant-template/main/setup.mjs \\",
+             "  | node - https://webstudio-merchant.your-subdomain.workers.dev"),
+        steps("Creates Merchant's API keys and prints them once. Save both in your password manager.",
+              "Asks for your Stripe secret key (`sk_test_…` to start; input is hidden), creates the Stripe webhook for paid and expired checkouts, and connects Stripe to Merchant.",
+              "Optionally adds four demo products so you can try the shop right away."),
         table(["Key", "Starts with", "Where it goes"],
               ["Public key", "`pk_`", "Webstudio `shop` variable. Safe in the browser: it can only read products and create carts."],
-              ["Admin key", "`sk_`", "Only the account Worker secret and your password manager. Never paste it into Webstudio."]),
-        note("Run the init command right after deploying. Until keys exist, anyone who finds the URL could create them first."),
-    ]),
-    ("stripe", "2. Connect Stripe", [
-        steps("In Stripe → Developers → Webhooks, add an endpoint `MERCHANT_URL/v1/webhooks/stripe` for the events `checkout.session.completed` and `checkout.session.expired`. Copy its signing secret (`whsec_…`).",
-              "Give Merchant your secret key and the signing secret. Merchant reads the key in two places, so set both:"),
-        code("npx wrangler secret put STRIPE_SECRET_KEY",
-             "",
-             "curl -X POST $MERCHANT_URL/v1/setup/stripe \\",
-             "  -H \"Authorization: Bearer sk_…\" -H \"content-type: application/json\" \\",
-             "  -d '{\"stripe_secret_key\":\"sk_test_…\",\"stripe_webhook_secret\":\"whsec_…\"}'"),
-        p("Copy your publishable key (`pk_test_…` or `pk_live_…`) from Stripe → Developers → API keys. It goes into the Webstudio `shop` variable and enables the payment form on your own page. Leave it empty to send shoppers to Stripe's hosted page instead."),
+              ["Admin key", "`sk_`", "The account Worker (step 3) and your password manager. Never paste it into Webstudio."]),
+        p("Copy your Stripe publishable key (`pk_test_…` or `pk_live_…`) from Stripe → Developers → API keys. It goes into the `shop` variable and enables the payment box on your own page."),
         h3("Taxes"),
         p("`STRIPE_AUTOMATIC_TAX` in `merchant/wrangler.jsonc` controls Stripe Tax. It is `\"false\"` in this template. Set it to `\"true\"` only after Stripe Tax is active on your Stripe account, otherwise every checkout fails."),
     ]),
-    ("account", "3. Deploy the account Worker", [
-        p("Open `account/wrangler.jsonc` and set:"),
+    ("account", "3. Optional: customer accounts and order emails", [
+        deploy("account", "Deploy the account Worker to Cloudflare"),
+        p("Paste your Merchant admin key when the deploy asks for `MERCHANT_ADMIN_KEY`. The Worker creates its database tables by itself. Then, in the repository Cloudflare created for you, edit `wrangler.jsonc`; every push redeploys:"),
         table(["Setting", "Value"],
-              ["`SHOP_NAME`", "Your shop's name, used in sign-in emails."],
+              ["`SHOP_NAME`", "Your shop's name, used in emails."],
               ["`SITE_ORIGIN`", "Your published site, for example `https://shop.example.com`."],
               ["`ALLOWED_ORIGINS`", "Other origins allowed to call the Worker, comma separated: your `*.wstd.io` staging domain and the Builder canvas origin."],
               ["`MAIL_FROM`", "Sender address on a domain onboarded to Cloudflare Email Sending."],
               ["`SHOP_INBOX`", "Your inbox for “new order” emails. Leave empty to skip them."],
               ["`ADMIN_URL`", "Your Merchant admin URL, linked from “new order” emails."],
-              ["`services`", "Points to your Merchant Worker by name. Workers on the same account cannot fetch each other's `workers.dev` URLs, so they talk through this binding."]),
-        code("cd account",
-             "npm install",
-             "npx wrangler deploy",
-             "npx wrangler d1 execute webstudio-merchant-account --remote --file=schema.sql",
-             "npx wrangler secret put MERCHANT_ADMIN_KEY"),
-        h3("Sign-in emails"),
-        p("In Cloudflare go to Compute → Email Service → Email Sending and onboard your domain or a subdomain. Cloudflare adds the SPF, DKIM and DMARC records for you. Onboarding a subdomain keeps your main domain's email untouched."),
-        note("Until email is set up, the sign-in form answers “Sign-in by email isn't set up for this shop yet.” Everything else works."),
+              ["`send_email`", "Uncomment once `MAIL_FROM`'s domain is onboarded."],
+              ["`services`", "Points to your Merchant Worker by name (`webstudio-merchant`). Change it if you renamed Merchant."]),
+        h3("Sign-in and order emails"),
+        p("In Cloudflare go to Compute → Email Service → Email Sending and onboard your domain or a subdomain. Cloudflare adds the SPF, DKIM and DMARC records. A subdomain keeps your main domain's email untouched."),
+        p("Finally, open the account Worker's URL once in your browser. It registers itself for Merchant's order webhook and answers with its status. Put the URL into `shop.accountUrl`."),
+        note("Without the account Worker the shop and checkout still work; only sign-in, order history, order emails and the order number on the confirmation page need it."),
     ]),
     ("emails", "Order emails", [
-        p("With the account Worker deployed, every paid order sends two emails through Cloudflare Email Sending:"),
+        p("With the account Worker deployed and email set up, every paid order sends two emails through Cloudflare Email Sending:"),
         table(["Email", "To", "Contains"],
               ["Order confirmation", "The customer", "Order number, items, totals, shipping address and a link to their account"],
               ["New order", "`SHOP_INBOX`", "The same details plus the customer's email and a link to your Merchant admin"]),
-        p("Merchant tells the account Worker about new orders with its signed `order.created` webhook. Register it once and store the secret Merchant returns:"),
-        code("curl -X POST $MERCHANT_URL/v1/webhooks -H \"Authorization: Bearer sk_…\" \\",
-             "  -H \"content-type: application/json\" \\",
-             "  -d '{\"url\":\"https://ACCOUNT_WORKER_URL/hooks/merchant\",\"events\":[\"order.created\"]}'",
-             "",
-             "cd account && npx wrangler secret put MERCHANT_WEBHOOK_SECRET   # paste the returned whsec_…"),
-        bullets("The Worker checks Merchant's signature on every call and sends each order's emails only once, even when Merchant retries.",
+        bullets("Merchant announces each paid order with its signed `order.created` webhook. The account Worker registered itself for it when you first opened its URL, and keeps the signing secret in its database.",
+                "The Worker checks Merchant's signature on every call and sends each order's emails only once, even when Merchant retries.",
                 "Customers who sign in at `/account` with the same email see every order with items, prices, totals, shipping address, status and tracking."),
     ]),
-    ("webstudio", "4. Configure the Webstudio project", [
+    ("webstudio", "4. Connect Webstudio", [
         p("All connection settings live in one place: the `shop` variable on Global Root (Data variables panel). Edit it and publish."),
         table(["Field", "Example", "Used for"],
               ["`name`", "`Hearth`", "Shop name"],
@@ -193,17 +182,15 @@ SECTIONS = [
         p("To test other outcomes, use `4000 0025 0000 3155` (asks for 3-D Secure confirmation) or `4000 0000 0000 9995` (declined: insufficient funds). Stripe lists more in its [testing documentation](https://docs.stripe.com/testing)."),
         p("After paying you land on `/checkout/success` with your order number. The order appears in Merchant's admin, and signing in at `/account` with the same email shows it in the order history."),
         h3("Going live"),
-        steps("Switch Stripe to live mode and repeat step 2 with live keys: `STRIPE_SECRET_KEY`, a live webhook endpoint and its signing secret, and `POST /v1/setup/stripe`.",
+        steps("Switch Stripe to live mode and run the setup script again with your live secret key (`sk_live_…`). It keeps your Merchant keys and replaces the Stripe connection and webhook.",
               "Put the live publishable key (`pk_live_…`) into the `shop` variable.",
               "Delete the Demo Notice on the cart page (inside the Payment section) and replace the placeholder legal pages.",
               "Publish, then place one real order and refund it through Merchant to confirm the whole flow."),
     ]),
     ("products", "Managing products", [
-        p("The easiest way is Merchant's admin dashboard. It ships with Merchant and deploys as its own small Worker:"),
-        code("cd merchant/admin",
-             "npm install && npm run build",
-             "npx wrangler deploy"),
-        p("Open the URL Wrangler prints and sign in with your Merchant URL and admin key (`sk_…`). The key stays in that browser only. The dashboard manages products, variants, stock, images, orders, customers and discounts."),
+        p("The easiest way is Merchant's own admin dashboard, deployed as a small static Worker:"),
+        deploy("admin", "Deploy the admin dashboard to Cloudflare"),
+        p("Open its URL and sign in with your Merchant URL and admin key (`sk_…`). The key stays in that browser only. The dashboard manages products, variants, stock, images, orders, customers and discounts."),
         '<div ws:label="Admin Screenshots" ws:style={css`display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: var(--gap-s); align-items: start;`}><figure ws:style={css`margin: 0; display: flex; flex-direction: column; row-gap: var(--size-2);`}><Image src={new AssetValue("0xAPCafTRF-LcQOKQECFR")} alt="Merchant admin product list" width={1148} height={1055} optimize={true} loading="lazy" sizes="(max-width: 991px) 100vw, 16rem" ws:style={css`display: block; width: 100%; height: auto; border-top-width: 1px; border-right-width: 1px; border-bottom-width: 1px; border-left-width: 1px; border-top-style: solid; border-right-style: solid; border-bottom-style: solid; border-left-style: solid; border-top-color: var(--border-default); border-right-color: var(--border-default); border-bottom-color: var(--border-default); border-left-color: var(--border-default); border-top-left-radius: var(--radius-control); border-top-right-radius: var(--radius-control); border-bottom-left-radius: var(--radius-control); border-bottom-right-radius: var(--radius-control);`} /><figcaption craft="text, text-small">Products: every product with its variants and status.</figcaption></figure><figure ws:style={css`margin: 0; display: flex; flex-direction: column; row-gap: var(--size-2);`}><Image src={new AssetValue("zcDbAzDo0PdhIUz8XN5eP")} alt="Merchant admin product editor with three variants" width={1148} height={1055} optimize={true} loading="lazy" sizes="(max-width: 991px) 100vw, 16rem" ws:style={css`display: block; width: 100%; height: auto; border-top-width: 1px; border-right-width: 1px; border-bottom-width: 1px; border-left-width: 1px; border-top-style: solid; border-right-style: solid; border-bottom-style: solid; border-left-style: solid; border-top-color: var(--border-default); border-right-color: var(--border-default); border-bottom-color: var(--border-default); border-left-color: var(--border-default); border-top-left-radius: var(--radius-control); border-top-right-radius: var(--radius-control); border-bottom-left-radius: var(--radius-control); border-bottom-right-radius: var(--radius-control);`} /><figcaption craft="text, text-small">Editing a product: variants with photo, SKU and price.</figcaption></figure><figure ws:style={css`margin: 0; display: flex; flex-direction: column; row-gap: var(--size-2);`}><Image src={new AssetValue("JzH3sOybIFPdxVG7Z3IOZ")} alt="Merchant admin order detail with items, totals and tracking" width={476} height={429} optimize={true} loading="lazy" sizes="(max-width: 991px) 100vw, 16rem" ws:style={css`display: block; width: 100%; height: auto; border-top-width: 1px; border-right-width: 1px; border-bottom-width: 1px; border-left-width: 1px; border-top-style: solid; border-right-style: solid; border-bottom-style: solid; border-left-style: solid; border-top-color: var(--border-default); border-right-color: var(--border-default); border-bottom-color: var(--border-default); border-left-color: var(--border-default); border-top-left-radius: var(--radius-control); border-top-right-radius: var(--radius-control); border-bottom-left-radius: var(--radius-control); border-bottom-right-radius: var(--radius-control);`} /><figcaption craft="text, text-small">An order: items, totals, status and tracking link.</figcaption></figure></div>',
         p("You can also use the API directly:"),
         code("# 1. Create a product (starts as draft)",
@@ -282,6 +269,7 @@ SECTIONS = [
               ["`STRIPE_AUTOMATIC_TAX`", "Setting it to `\"false\"` creates checkout sessions without Stripe Tax. Without the setting, behaviour is unchanged (tax on).", "Upstream always enables Stripe Tax, so checkout fails until Stripe Tax is activated. New shops can now start selling first."],
               ["Line item names", "Cart items are named “Product – Variant”, for example “Beeswax Candle – Large”.", "Upstream uses only the variant title (“Large”), which is unclear on Stripe, receipts and order history."],
               ["Address from your form", "Checkout accepts a `shipping_address` object. Stripe then does not ask for an address, and the webhook stores it on the order.", "Lets the checkout form be designed in Webstudio, with only the payment in Stripe's box."],
+              ["Stripe key fallback", "When the Worker has no Stripe secrets, Merchant uses the keys saved by `POST /v1/setup/stripe`.", "Upstream reads the key from two different places; now connecting Stripe once (the setup script) is enough."],
               ["Stock reservations (bug fix)", "Abandoned checkouts release their reserved stock when Stripe expires the session (after 30 minutes, via `checkout.session.expired`). Expired carts no longer push `reserved` below zero.", "Upstream never releases abandoned checkouts, and its cart cleanup makes `reserved` negative, which inflates available stock and can oversell."]),
         p("If Merchant changes and the patch no longer applies, `git apply --3way ../webstudio-merchant-template/merchant.patch` usually resolves it. These changes are good candidates for a pull request upstream; once merged, the patch step goes away."),
     ]),
